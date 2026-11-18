@@ -10,7 +10,7 @@ Mỗi dòng nhãn: `id cx cy w h` (5 số, toạ độ 0–1). Trả về list[I
 | BAD_CLASS_ID     | ERROR    | id lớp ngoài 0..len(ds.classes)-1                                        |
 | BOX_ZERO         | ERROR    | w <= 0 hoặc h <= 0                                                       |
 | BOX_OUT_OF_IMAGE | ERROR    | mép box vượt [0,1] quá `cfg["label_format"]["overflow_tol"]`; extra={"overflow": mức tràn} |
-| DUP_BOX          | ERROR    | cùng lớp với một dòng TRƯỚC ĐÓ và IoU > `dup_box_iou`; báo ở dòng SAU    |
+| DUP_BOX          | ERROR    | cùng lớp với một dòngparse_yolo_line TRƯỚC ĐÓ và IoU > `dup_box_iou`; báo ở dòng SAU    |
 | BOX_TINY         | WARN     | cạnh ngắn của box (px) < `min_box_px`  (cần `ds.image_size(stem)`)       |
 | BOX_HUGE         | WARN     | w*h > `max_box_frac`                                                     |
 
@@ -25,5 +25,36 @@ from ..common import ERROR, WARN, Issue, iou_xywh, parse_yolo_line  # noqa: F401
 
 
 def run(ds, cfg):
-    # TODO: duyệt từng file nhãn, từng dòng
-    raise NotImplementedError("check label_format chưa làm")
+    issues = []
+    config = cfg["label_format"]
+    for path in ds.label_files():
+        stem = path.stem
+        previous = []
+        size = ds.image_size(stem)
+        for number, text in ds.read_label_lines(stem):
+            def add(code, severity=ERROR, extra=None):
+                issues.append(Issue("label_format", severity, code, stem, code, number, extra or {}))
+
+            try:
+                cls, x, y, w, h = parse_yolo_line(text)
+            except (ValueError, OverflowError):
+                add("BAD_FORMAT")
+                continue
+            if not 0 <= cls < len(ds.classes):
+                add("BAD_CLASS_ID")
+                continue
+            if w <= 0 or h <= 0:
+                add("BOX_ZERO")
+                continue
+            box = (x, y, w, h)
+            overflow = max(0, w / 2 - x, h / 2 - y, x + w / 2 - 1, y + h / 2 - 1)
+            if overflow > config["overflow_tol"]:
+                add("BOX_OUT_OF_IMAGE", extra={"overflow": overflow})
+            if any(cls == old_cls and iou_xywh(box, old_box) > config["dup_box_iou"] for old_cls, old_box in previous):
+                add("DUP_BOX")
+            previous.append((cls, box))
+            if size and min(w * size[0], h * size[1]) < config["min_box_px"]:
+                add("BOX_TINY", WARN)
+            if w * h > config["max_box_frac"]:
+                add("BOX_HUGE", WARN)
+    return issues
