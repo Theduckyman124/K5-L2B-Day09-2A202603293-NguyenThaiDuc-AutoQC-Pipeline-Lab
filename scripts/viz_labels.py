@@ -14,7 +14,7 @@ from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from pipeline.common import Dataset, parse_yolo_line  # noqa: E402
+from pipeline.common import Dataset, parse_yolo_line  # noqa: E402x`
 
 COLORS = ["#2563eb", "#dc2626", "#ea580c", "#9333ea"]
 NAMES = ["car", "person", "truck", "bus"]

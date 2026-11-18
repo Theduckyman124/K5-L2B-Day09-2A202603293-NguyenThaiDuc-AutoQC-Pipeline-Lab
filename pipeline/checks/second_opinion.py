@@ -40,5 +40,53 @@ from ..model_cache import get_preds  # noqa: F401
 
 
 def run(ds, cfg, preds=None):
-    # TODO
-    raise NotImplementedError("check second_opinion chưa làm")
+    if preds is None:
+        preds = get_preds(ds, cfg, "checker")
+
+    config = cfg["second_opinion"]
+    issues = []
+    for image in ds.image_files():
+        stem = image.stem
+        lines = ds.read_label_lines(stem)
+        size = ds.image_size(stem)
+        if stem not in preds or lines is None or size is None:
+            continue
+
+        # Giữ số dòng gốc để báo vị trí chính xác cho FALSE_POS.
+        labels = []
+        for number, text in lines:
+            try:
+                box = parse_yolo_line(text)
+            except (ValueError, OverflowError):
+                continue
+            if 0 <= box[0] < len(ds.classes):
+                labels.append((number, box))
+
+        predictions = preds[stem]
+        for cls, conf, x, y, w, h in predictions:
+            if conf < config["conf"] or w * size[0] * h * size[1] < config["min_area_px"]:
+                continue
+            candidates = [
+                (box[0], iou_xywh((x, y, w, h), box[1:]))
+                for _, box in labels
+            ]
+            candidates = [(c, iou) for c, iou in candidates if iou >= config["iou_missing"]]
+            same_class = [iou for c, iou in candidates if c == cls]
+            code = None
+            if not candidates:
+                code = "POSSIBLE_MISSING"
+            elif same_class:
+                if max(same_class) < config["iou_loose"]:
+                    code = "POSSIBLE_LOOSE_BOX"
+            elif max(iou for _, iou in candidates) >= config["iou_match"]:
+                code = "POSSIBLE_WRONG_CLASS"
+            if code:
+                issues.append(Issue("second_opinion", WARN, code, stem, code, extra={"conf": conf}))
+
+        # FALSE_POS dùng ngưỡng riêng và không lọc kích thước dự đoán.
+        for number, box in labels:
+            if all(iou_xywh(box[1:], p[2:]) < config["iou_missing"]
+                   for p in predictions if p[1] >= config["fp_conf"]):
+                issues.append(Issue("second_opinion", WARN, "POSSIBLE_FALSE_POS", stem,
+                                    "Nhãn không khớp dự đoán", number))
+    return issues
